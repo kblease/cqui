@@ -20,7 +20,7 @@ local HEADER_Y			:number	= 41;
 local WINDOW_HEADER_Y	:number	= 150;
 local TOPBAR_Y			:number	= 28;
 local SEPARATOR_Y		:number	= 20;
-local BUTTON_Y			:number	= 48;
+local BUTTON_Y			:number	= 32;
 local DISABLED_PADDING_Y:number	= 10;
 local TEXTURE_BASE				:string = "UnitFlagBase";
 local TEXTURE_CIVILIAN			:string = "UnitFlagCivilian";
@@ -553,6 +553,441 @@ function PopulateList(data, listMode, listIM)
 	local cityData = GetCityData(selectedCity);
 	local localPlayer = Players[Game.GetLocalPlayer()];
 
+	-- Populate Units ------------------------
+	unitList = listIM:GetInstance();
+	unitList.Header:SetText(Locale.ToUpper(Locale.Lookup("LOC_TECH_FILTER_UNITS")));
+	unitList.HeaderOn:SetText(Locale.ToUpper(Locale.Lookup("LOC_TECH_FILTER_UNITS")));
+	local uL = unitList;
+	if ( unitList.unitListIM ~= nil ) then
+		unitList.unitListIM:ResetInstances();
+	else
+		unitList.unitListIM = InstanceManager:new( "UnitListInstance", "Root", unitList.List);
+	end
+	if ( unitList.civilianListIM ~= nil ) then
+		unitList.civilianListIM:ResetInstances();
+	else
+		unitList.civilianListIM = InstanceManager:new( "CivilianListInstance",	"Root", unitList.List);
+	end
+
+	local unitData;
+	if(listMode == LISTMODE.PRODUCTION) then
+		unitData = data.UnitItems;
+	else
+		unitData = data.UnitPurchases;
+	end
+	for i, item in ipairs(unitData) do
+		local unitListing;
+		if ((item.Yield == "YIELD_GOLD" and listMode == LISTMODE.PURCHASE_GOLD) or (item.Yield == "YIELD_FAITH" and listMode == LISTMODE.PURCHASE_FAITH) or listMode == LISTMODE.PRODUCTION) then
+
+			if (item.Civilian) then
+				unitListing = unitList["civilianListIM"]:GetInstance();
+			else
+				unitListing = unitList["unitListIM"]:GetInstance();
+			end
+			ResetInstanceVisibility(unitListing);
+			-- Check to see if this item is recommended
+			--for _,hash in ipairs( m_recommendedItems) do
+			--	if(item.Hash == hash.BuildItemHash) then
+			--		unitListing.RecommendedIcon:SetHide(false);
+			--	end
+			--end
+
+			local costStr = "";
+			local costStrTT = "";
+			if(listMode == LISTMODE.PRODUCTION) then
+				-- ProductionQueue: We need to check that there isn't already one of these in the queue
+				if(prodQueue[cityID][1] and prodQueue[cityID][1].entry.Hash == item.Hash) then
+					item.TurnsLeft = math.ceil(item.Cost / cityData.ProductionPerTurn);
+					item.Progress = 0;
+				end
+
+				-- Production meter progress for parent unit
+				if(item.Progress > 0) then
+					unitListing.ProductionProgressArea:SetHide(false);
+					local unitProgress = item.Progress/item.Cost;
+					if (unitProgress < 1) then
+						unitListing.ProductionProgress:SetPercent(unitProgress);
+					else
+						unitListing.ProductionProgressArea:SetHide(true);
+					end
+				else
+					unitListing.ProductionProgressArea:SetHide(true);
+				end
+				costStrTT = item.TurnsLeft .. Locale.Lookup("LOC_HUD_CITY_TURNS_TO_COMPLETE", item.TurnsLeft);
+				costStr = item.TurnsLeft .. "[ICON_Turn]";
+			else
+				unitListing.ProductionProgressArea:SetHide(true);
+				if (item.Yield == "YIELD_GOLD") then
+					costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_GOLD_TEXT", item.Cost);
+				else
+					costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_FAITH_TEXT", item.Cost);
+				end
+				if item.CantAfford then
+					costStr = "[COLOR:Red]" .. costStr .. "[ENDCOLOR]";
+				end
+			end
+
+			-- PQ: Check if we already have max spies including queued
+			if(item.Hash == GameInfo.Units["UNIT_SPY"].Hash) then
+				local localDiplomacy = localPlayer:GetDiplomacy();
+				local spyCap = localDiplomacy:GetSpyCapacity();
+				local numberOfSpies = 0;
+
+				-- Count our spies
+				local localPlayerUnits:table = localPlayer:GetUnits();
+				for i, unit in localPlayerUnits:Members() do
+					local unitInfo:table = GameInfo.Units[unit:GetUnitType()];
+					if unitInfo.Spy then
+						numberOfSpies = numberOfSpies + 1;
+					end
+				end
+
+				-- Loop through all players to see if they have any of our captured spies
+				local players:table = Game.GetPlayers();
+				for i, player in ipairs(players) do
+					local playerDiplomacy:table = player:GetDiplomacy();
+					local numCapturedSpies:number = playerDiplomacy:GetNumSpiesCaptured();
+					for i=0,numCapturedSpies-1,1 do
+						local spyInfo:table = playerDiplomacy:GetNthCapturedSpy(player:GetID(), i);
+						if spyInfo and spyInfo.OwningPlayer == Game.GetLocalPlayer() then
+							numberOfSpies = numberOfSpies + 1;
+						end
+					end
+				end
+
+				-- Count travelling spies
+				if localDiplomacy then
+					local numSpiesOffMap:number = localDiplomacy:GetNumSpiesOffMap();
+					for i=0,numSpiesOffMap-1,1 do
+						local spyOffMapInfo:table = localDiplomacy:GetNthOffMapSpy(Game.GetLocalPlayer(), i);
+						if spyOffMapInfo and spyOffMapInfo.ReturnTurn ~= -1 then
+							numberOfSpies = numberOfSpies + 1;
+						end
+					end
+				end
+
+  				if(spyCap > numberOfSpies) then
+  					for _,city in pairs(prodQueue) do
+						for _,qi in pairs(city) do
+							if(qi.entry.Hash == item.Hash) then
+								numberOfSpies = numberOfSpies + 1;
+							end
+						end
+					end
+					if(numberOfSpies >= spyCap) then
+						item.Disabled = true;
+						-- No existing localization string for "Need more spy slots" so we'll just gray it out
+						-- item.ToolTip = item.ToolTip .. "[NEWLINE][NEWLINE][COLOR:Red]" .. Locale.Lookup("???");
+					end
+  				end
+			end
+
+			-- PQ: Check if we already have max traders queued
+			if(item.Hash == GameInfo.Units["UNIT_TRADER"].Hash) then
+				local playerTrade	:table	= localPlayer:GetTrade();
+				local routesActive	:number = playerTrade:GetNumOutgoingRoutes();
+				local routesCapacity:number = playerTrade:GetOutgoingRouteCapacity();
+				local routesQueued  :number = 0;
+
+				if(routesCapacity > routesActive) then
+					for _,city in pairs(prodQueue) do
+						for _,qi in pairs(city) do
+							if(qi.entry.Hash == item.Hash) then
+								routesQueued = routesQueued + 1;
+							end
+						end
+					end
+					if(routesActive + routesQueued >= routesCapacity) then
+						item.Disabled = true;
+						if(not string.find(item.ToolTip, "[COLOR:Red]")) then
+							item.ToolTip = item.ToolTip .. "[NEWLINE][NEWLINE][COLOR:Red]" .. Locale.Lookup("LOC_UNIT_TRAIN_FULL_TRADE_ROUTE_CAPACITY");
+						end
+					end
+				end
+			end
+
+			local nameStr = Locale.Lookup("{1_Name}", item.Name);
+			unitListing.LabelText:SetText(nameStr);
+			unitListing.CostText:SetText(costStr);
+			if(costStrTT ~= "") then
+				unitListing.CostText:SetToolTipString(costStrTT);
+			end
+			unitListing.TrainUnit:SetToolTipString(item.ToolTip);
+			unitListing.Disabled:SetToolTipString(item.ToolTip);
+
+			-- Set Icon color and backing
+			local textureName = TEXTURE_BASE;
+			if item.Type ~= -1 then
+				if (GameInfo.Units[item.Type].Combat ~= 0 or GameInfo.Units[item.Type].RangedCombat ~= 0) then		-- Need a simpler what to test if the unit is a combat unit or not.
+					if "DOMAIN_SEA" == GameInfo.Units[item.Type].Domain then
+						textureName = TEXTURE_NAVAL;
+					else
+						textureName =  TEXTURE_BASE;
+					end
+				else
+					if GameInfo.Units[item.Type].MakeTradeRoute then
+						textureName = TEXTURE_TRADE;
+					elseif "FORMATION_CLASS_SUPPORT" == GameInfo.Units[item.Type].FormationClass then
+						textureName = TEXTURE_SUPPORT;
+					else
+						textureName = TEXTURE_CIVILIAN;
+					end
+				end
+			end
+
+			-- Set colors and icons for the flag instance
+			unitListing.Icon:SetColor( "0xFFFFFFFF" );
+			unitListing.Icon:SetIcon(ICON_PREFIX..item.Type);
+
+			-- Handle if the item is disabled
+			if (item.Disabled) then
+				if(showDisabled) then
+					unitListing.Disabled:SetHide(false);
+					unitListing.TrainUnit:SetColor(COLOR_LOW_OPACITY);
+					unitListing.RecommendedIcon:SetHide(true);
+				else
+					unitListing.TrainUnit:SetHide(true);
+				end
+			else
+				unitListing.TrainUnit:SetHide(false);
+				unitListing.Disabled:SetHide(true);
+				unitListing.TrainUnit:SetColor(0xffffffff);
+			end
+			unitListing.TrainUnit:SetDisabled(item.Disabled);
+			if (listMode == LISTMODE.PRODUCTION) then
+				unitListing.TrainUnit:RegisterCallback( Mouse.eLClick, function()
+					QueueUnit(data.City, item, m_isCONTROLpressed);
+					end);
+
+				unitListing.TrainUnit:RegisterCallback( Mouse.eMClick, function()
+					QueueUnit(data.City, item, true);
+					RecenterCameraToSelectedCity();
+					end);
+			else
+				unitListing.TrainUnit:RegisterCallback( Mouse.eLClick, function()
+					PurchaseUnit(data.City, item);
+					end);
+			end
+
+			unitListing.TrainUnit:RegisterCallback( Mouse.eRClick, function()
+				LuaEvents.OpenCivilopedia(item.Type);
+			end);
+
+			unitListing.TrainUnit:SetTag(UITutorialManager:GetHash(item.Type));
+
+			-- Controls for training unit corps and armies.
+			-- Want a special text string for this!! #NEW TEXT #LOCALIZATION - "You can only directly build corps and armies once you have constructed a military academy."
+			-- LOC_UNIT_TRAIN_NEED_MILITARY_ACADEMY
+			if item.Corps or item.Army then
+				--if (item.Disabled) then
+				--	if(showDisabled) then
+				--		unitListing.CorpsDisabled:SetHide(false);
+				--		unitListing.ArmyDisabled:SetHide(false);
+				--	end
+				--end
+				unitListing.CorpsArmyDropdownArea:SetHide(false);
+				unitListing.CorpsArmyDropdownButton:RegisterCallback( Mouse.eLClick, function()
+						local isExpanded = unitListing.CorpsArmyArrow:IsSelected();
+						unitListing.CorpsArmyArrow:SetSelected(not isExpanded);
+						unitListing.ArmyCorpsDrawer:SetHide(not isExpanded);
+						unitList.List:CalculateSize();
+						unitList.List:ReprocessAnchoring();
+						unitList.Top:CalculateSize();
+						unitList.Top:ReprocessAnchoring();
+						if(listMode == LISTMODE.PRODUCTION) then
+							Controls.ProductionList:CalculateSize();
+							Controls.ProductionListScroll:CalculateSize();
+						elseif(listMode == LISTMODE.PURCHASE_GOLD) then
+							Controls.PurchaseList:CalculateSize();
+							Controls.PurchaseListScroll:CalculateSize();
+						elseif(listMode == LISTMODE.PURCHASE_FAITH) then
+							Controls.PurchaseFaithList:CalculateSize();
+							Controls.PurchaseFaithListScroll:CalculateSize();
+						end
+						end);
+			end
+
+			if item.Corps then
+				-- Check to see if this item is recommended
+				--for _,hash in ipairs( m_recommendedItems) do
+				--	if(item.Hash == hash.BuildItemHash) then
+				--		unitListing.CorpsRecommendedIcon:SetHide(false);
+				--	end
+				--end
+				unitListing.CorpsButtonContainer:SetHide(false);
+				-- Production meter progress for corps unit
+				if (listMode == LISTMODE.PRODUCTION) then
+					-- ProductionQueue: We need to check that there isn't already one of these in the queue
+					if(IsHashInQueue(selectedCity, item.Hash)) then
+						item.CorpsTurnsLeft = math.ceil(item.CorpsCost / cityData.ProductionPerTurn);
+						item.Progress = 0;
+					end
+
+					if(item.Progress > 0) then
+						unitListing.ProductionCorpsProgressArea:SetHide(false);
+						local unitProgress = item.Progress/item.CorpsCost;
+						if (unitProgress < 1) then
+							unitListing.ProductionCorpsProgress:SetPercent(unitProgress);
+						else
+							unitListing.ProductionCorpsProgressArea:SetHide(true);
+						end
+					else
+						unitListing.ProductionCorpsProgressArea:SetHide(true);
+					end
+					local turnsStr = item.CorpsTurnsLeft .. "[ICON_Turn]";
+					local turnsStrTT = item.CorpsTurnsLeft .. Locale.Lookup("LOC_HUD_CITY_TURNS_TO_COMPLETE", item.CorpsTurnsLeft);
+					unitListing.CorpsCostText:SetText(turnsStr);
+					unitListing.CorpsCostText:SetToolTipString(turnsStrTT);
+				else
+					unitListing.ProductionCorpsProgressArea:SetHide(true);
+					if (item.Yield == "YIELD_GOLD") then
+						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_GOLD_TEXT", item.CorpsCost);
+					else
+						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_FAITH_TEXT", item.CorpsCost);
+					end
+					if (item.CorpsDisabled) then
+						if (showDisabled) then
+							unitListing.CorpsDisabled:SetHide(false);
+						end
+						costStr = "[COLOR:Red]" .. costStr .. "[ENDCOLOR]";
+					end
+					unitListing.CorpsCostText:SetText(costStr);
+				end
+
+
+				unitListing.CorpsLabelIcon:SetText(item.CorpsName);
+				unitListing.CorpsLabelText:SetText(nameStr);
+
+				unitListing.CorpsFlagBase:SetTexture(textureName);
+				unitListing.CorpsFlagBaseOutline:SetTexture(textureName);
+				unitListing.CorpsFlagBaseDarken:SetTexture(textureName);
+				unitListing.CorpsFlagBaseLighten:SetTexture(textureName);
+				unitListing.CorpsFlagBase:SetColor( primaryColor );
+				unitListing.CorpsFlagBaseOutline:SetColor( primaryColor );
+				unitListing.CorpsFlagBaseDarken:SetColor( darkerFlagColor );
+				unitListing.CorpsFlagBaseLighten:SetColor( brighterFlagColor );
+				unitListing.CorpsIcon:SetColor( secondaryColor );
+				unitListing.CorpsIcon:SetIcon(ICON_PREFIX..item.Type);
+				unitListing.TrainCorpsButton:SetToolTipString(item.CorpsTooltip);
+				unitListing.CorpsDisabled:SetToolTipString(item.CorpsTooltip);
+				if (listMode == LISTMODE.PRODUCTION) then
+					unitListing.TrainCorpsButton:RegisterCallback( Mouse.eLClick, function()
+						QueueUnitCorps(data.City, item);
+					end);
+
+					unitListing.TrainCorpsButton:RegisterCallback( Mouse.eMClick, function()
+						QueueUnitCorps(data.City, item, true);
+						RecenterCameraToSelectedCity();
+					end);
+				else
+					unitListing.TrainCorpsButton:RegisterCallback( Mouse.eLClick, function()
+						PurchaseUnitCorps(data.City, item);
+					end);
+				end
+			end
+			if item.Army then
+				-- Check to see if this item is recommended
+				--for _,hash in ipairs( m_recommendedItems) do
+				--	if(item.Hash == hash.BuildItemHash) then
+				--		unitListing.ArmyRecommendedIcon:SetHide(false);
+				--	end
+				--end
+				unitListing.ArmyButtonContainer:SetHide(false);
+
+				if (listMode == LISTMODE.PRODUCTION) then
+					-- ProductionQueue: We need to check that there isn't already one of these in the queue
+					if(IsHashInQueue(selectedCity, item.Hash)) then
+						item.ArmyTurnsLeft = math.ceil(item.ArmyCost / cityData.ProductionPerTurn);
+						item.Progress = 0;
+					end
+
+					if(item.Progress > 0) then
+						unitListing.ProductionArmyProgressArea:SetHide(false);
+						local unitProgress = item.Progress/item.ArmyCost;
+						unitListing.ProductionArmyProgress:SetPercent(unitProgress);
+						if (unitProgress < 1) then
+							unitListing.ProductionArmyProgress:SetPercent(unitProgress);
+						else
+							unitListing.ProductionArmyProgressArea:SetHide(true);
+						end
+					else
+						unitListing.ProductionArmyProgressArea:SetHide(true);
+					end
+					local turnsStr = item.ArmyTurnsLeft .. "[ICON_Turn]";
+					local turnsStrTT = item.ArmyTurnsLeft .. Locale.Lookup("LOC_HUD_CITY_TURNS_TO_COMPLETE", item.ArmyTurnsLeft);
+					unitListing.ArmyCostText:SetText(turnsStr);
+					unitListing.ArmyCostText:SetToolTipString(turnsStrTT);
+				else
+					unitListing.ProductionArmyProgressArea:SetHide(true);
+					if (item.Yield == "YIELD_GOLD") then
+						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_GOLD_TEXT", item.ArmyCost);
+					else
+						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_FAITH_TEXT", item.ArmyCost);
+					end
+					if (item.ArmyDisabled) then
+						if (showDisabled) then
+							unitListing.ArmyDisabled:SetHide(false);
+						end
+						costStr = "[COLOR:Red]" .. costStr .. "[ENDCOLOR]";
+					end
+					unitListing.ArmyCostText:SetText(costStr);
+				end
+
+				unitListing.ArmyLabelIcon:SetText(item.ArmyName);
+				unitListing.ArmyLabelText:SetText(nameStr);
+				unitListing.ArmyFlagBase:SetTexture(textureName);
+				unitListing.ArmyFlagBaseOutline:SetTexture(textureName);
+				unitListing.ArmyFlagBaseDarken:SetTexture(textureName);
+				unitListing.ArmyFlagBaseLighten:SetTexture(textureName);
+				unitListing.ArmyFlagBase:SetColor( primaryColor );
+				unitListing.ArmyFlagBaseOutline:SetColor( primaryColor );
+				unitListing.ArmyFlagBaseDarken:SetColor( darkerFlagColor );
+				unitListing.ArmyFlagBaseLighten:SetColor( brighterFlagColor );
+				unitListing.ArmyIcon:SetColor( secondaryColor );
+				unitListing.ArmyIcon:SetIcon(ICON_PREFIX..item.Type);
+				unitListing.TrainArmyButton:SetToolTipString(item.ArmyTooltip);
+				unitListing.ArmyDisabled:SetToolTipString(item.ArmyTooltip);
+				if (listMode == LISTMODE.PRODUCTION) then
+					unitListing.TrainArmyButton:RegisterCallback( Mouse.eLClick, function()
+						QueueUnitArmy(data.City, item);
+					end);
+
+					unitListing.TrainArmyButton:RegisterCallback( Mouse.eMClick, function()
+						QueueUnitArmy(data.City, item, true);
+						RecenterCameraToSelectedCity();
+					end);
+				else
+					unitListing.TrainArmyButton:RegisterCallback( Mouse.eLClick, function()
+						PurchaseUnitArmy(data.City, item);
+					end);
+				end
+			end
+		end -- end faith/gold check
+	end -- end iteration through units
+
+	unitList.List:CalculateSize();
+	unitList.List:ReprocessAnchoring();
+
+	if (unitList.List:GetSizeY()==0) then
+		unitList.Top:SetHide(true);
+	else
+		m_maxProductionSize = m_maxProductionSize + HEADER_Y + SEPARATOR_Y;
+		unitList.Header:RegisterCallback( Mouse.eLClick, function()
+			OnExpand(uL);
+			end);
+		unitList.HeaderOn:RegisterCallback( Mouse.eLClick, function()
+			OnCollapse(uL);
+			end);
+	end
+
+	if( listMode== LISTMODE.PURCHASE_GOLD) then
+		purchGoldUnitList = uL;
+	elseif (listMode == LISTMODE.PURCHASE_FAITH) then
+		purchFaithUnitList = uL;
+	else
+		prodUnitList = uL;
+	end
+
 	if(listMode == LISTMODE.PRODUCTION) then
 		m_maxProductionSize = 0;
 		-- Populate Current Item
@@ -780,10 +1215,6 @@ function PopulateList(data, listMode, listIM)
 					-- buildingItem.ToolTip = buildingItem.ToolTip .. "[NEWLINE][NEWLINE][COLOR:Red]" .. Locale.Lookup("LOC_UI_PEDIA_EXCLUSIVE_WITH");
 					-- buildingItem.ToolTip = buildingItem.ToolTip .. " " .. Locale.Lookup(GameInfo.Buildings[GameInfo.MutuallyExclusiveBuildings[buildingItem.Hash].MutuallyExclusiveBuilding].Name);
 				end
-			end
-		
-			if(buildingItem.Hash == GameInfo.Buildings["BUILDING_PALACE"].Hash) then
-				displayItem = false;
 			end
 
 			if(not buildingItem.IsWonder and not IsBuildingInQueue(selectedCity, buildingItem.Hash) and displayItem) then
@@ -1171,454 +1602,7 @@ function PopulateList(data, listMode, listIM)
 		end
 	end -- End if NOT LISTMODE.PRODUCTION
 
-	-- Populate Units ------------------------
-	local primaryColor, secondaryColor  = UI.GetPlayerColors( Players[Game.GetLocalPlayer()]:GetID() );
-	local darkerFlagColor	:number = DarkenLightenColor(primaryColor,(-85),255);
-	local brighterFlagColor :number = DarkenLightenColor(primaryColor,90,255);
-	local brighterIconColor :number = DarkenLightenColor(secondaryColor,20,255);
-	local darkerIconColor	:number = DarkenLightenColor(secondaryColor,-30,255);
 
-	unitList = listIM:GetInstance();
-	unitList.Header:SetText(Locale.ToUpper(Locale.Lookup("LOC_TECH_FILTER_UNITS")));
-	unitList.HeaderOn:SetText(Locale.ToUpper(Locale.Lookup("LOC_TECH_FILTER_UNITS")));
-	local uL = unitList;
-	if ( unitList.unitListIM ~= nil ) then
-		unitList.unitListIM:ResetInstances();
-	else
-		unitList.unitListIM = InstanceManager:new( "UnitListInstance", "Root", unitList.List);
-	end
-	if ( unitList.civilianListIM ~= nil ) then
-		unitList.civilianListIM:ResetInstances();
-	else
-		unitList.civilianListIM = InstanceManager:new( "CivilianListInstance",	"Root", unitList.List);
-	end
-
-	local unitData;
-	if(listMode == LISTMODE.PRODUCTION) then
-		unitData = data.UnitItems;
-	else
-		unitData = data.UnitPurchases;
-	end
-	for i, item in ipairs(unitData) do
-		local unitListing;
-		if ((item.Yield == "YIELD_GOLD" and listMode == LISTMODE.PURCHASE_GOLD) or (item.Yield == "YIELD_FAITH" and listMode == LISTMODE.PURCHASE_FAITH) or listMode == LISTMODE.PRODUCTION) then
-
-			if (item.Civilian) then
-				unitListing = unitList["civilianListIM"]:GetInstance();
-			else
-				unitListing = unitList["unitListIM"]:GetInstance();
-			end
-			ResetInstanceVisibility(unitListing);
-			-- Check to see if this item is recommended
-			--for _,hash in ipairs( m_recommendedItems) do
-			--	if(item.Hash == hash.BuildItemHash) then
-			--		unitListing.RecommendedIcon:SetHide(false);
-			--	end
-			--end
-
-			local costStr = "";
-			local costStrTT = "";
-			if(listMode == LISTMODE.PRODUCTION) then
-				-- ProductionQueue: We need to check that there isn't already one of these in the queue
-				if(prodQueue[cityID][1] and prodQueue[cityID][1].entry.Hash == item.Hash) then
-					item.TurnsLeft = math.ceil(item.Cost / cityData.ProductionPerTurn);
-					item.Progress = 0;
-				end
-
-				-- Production meter progress for parent unit
-				if(item.Progress > 0) then
-					unitListing.ProductionProgressArea:SetHide(false);
-					local unitProgress = item.Progress/item.Cost;
-					if (unitProgress < 1) then
-						unitListing.ProductionProgress:SetPercent(unitProgress);
-					else
-						unitListing.ProductionProgressArea:SetHide(true);
-					end
-				else
-					unitListing.ProductionProgressArea:SetHide(true);
-				end
-				costStrTT = item.TurnsLeft .. Locale.Lookup("LOC_HUD_CITY_TURNS_TO_COMPLETE", item.TurnsLeft);
-				costStr = item.TurnsLeft .. "[ICON_Turn]";
-			else
-				unitListing.ProductionProgressArea:SetHide(true);
-				if (item.Yield == "YIELD_GOLD") then
-					costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_GOLD_TEXT", item.Cost);
-				else
-					costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_FAITH_TEXT", item.Cost);
-				end
-				if item.CantAfford then
-					costStr = "[COLOR:Red]" .. costStr .. "[ENDCOLOR]";
-				end
-			end
-
-			-- PQ: Check if we already have max spies including queued
-			if(item.Hash == GameInfo.Units["UNIT_SPY"].Hash) then
-				local localDiplomacy = localPlayer:GetDiplomacy();
-				local spyCap = localDiplomacy:GetSpyCapacity();
-				local numberOfSpies = 0;
-
-				-- Count our spies
-				local localPlayerUnits:table = localPlayer:GetUnits();
-				for i, unit in localPlayerUnits:Members() do
-					local unitInfo:table = GameInfo.Units[unit:GetUnitType()];
-					if unitInfo.Spy then
-						numberOfSpies = numberOfSpies + 1;
-					end
-				end
-
-				-- Loop through all players to see if they have any of our captured spies
-				local players:table = Game.GetPlayers();
-				for i, player in ipairs(players) do
-					local playerDiplomacy:table = player:GetDiplomacy();
-					local numCapturedSpies:number = playerDiplomacy:GetNumSpiesCaptured();
-					for i=0,numCapturedSpies-1,1 do
-						local spyInfo:table = playerDiplomacy:GetNthCapturedSpy(player:GetID(), i);
-						if spyInfo and spyInfo.OwningPlayer == Game.GetLocalPlayer() then
-							numberOfSpies = numberOfSpies + 1;
-						end
-					end
-				end
-
-				-- Count travelling spies
-				if localDiplomacy then
-					local numSpiesOffMap:number = localDiplomacy:GetNumSpiesOffMap();
-					for i=0,numSpiesOffMap-1,1 do
-						local spyOffMapInfo:table = localDiplomacy:GetNthOffMapSpy(Game.GetLocalPlayer(), i);
-						if spyOffMapInfo and spyOffMapInfo.ReturnTurn ~= -1 then
-							numberOfSpies = numberOfSpies + 1;
-						end
-					end
-				end
-
-  				if(spyCap > numberOfSpies) then
-  					for _,city in pairs(prodQueue) do
-						for _,qi in pairs(city) do
-							if(qi.entry.Hash == item.Hash) then
-								numberOfSpies = numberOfSpies + 1;
-							end
-						end
-					end
-					if(numberOfSpies >= spyCap) then
-						item.Disabled = true;
-						-- No existing localization string for "Need more spy slots" so we'll just gray it out
-						-- item.ToolTip = item.ToolTip .. "[NEWLINE][NEWLINE][COLOR:Red]" .. Locale.Lookup("???");
-					end
-  				end
-			end
-
-			-- PQ: Check if we already have max traders queued
-			if(item.Hash == GameInfo.Units["UNIT_TRADER"].Hash) then
-				local playerTrade	:table	= localPlayer:GetTrade();
-				local routesActive	:number = playerTrade:GetNumOutgoingRoutes();
-				local routesCapacity:number = playerTrade:GetOutgoingRouteCapacity();
-				local routesQueued  :number = 0;
-
-				if(routesCapacity > routesActive) then
-					for _,city in pairs(prodQueue) do
-						for _,qi in pairs(city) do
-							if(qi.entry.Hash == item.Hash) then
-								routesQueued = routesQueued + 1;
-							end
-						end
-					end
-					if(routesActive + routesQueued >= routesCapacity) then
-						item.Disabled = true;
-						if(not string.find(item.ToolTip, "[COLOR:Red]")) then
-							item.ToolTip = item.ToolTip .. "[NEWLINE][NEWLINE][COLOR:Red]" .. Locale.Lookup("LOC_UNIT_TRAIN_FULL_TRADE_ROUTE_CAPACITY");
-						end
-					end
-				end
-			end
-
-			local nameStr = Locale.Lookup("{1_Name}", item.Name);
-			unitListing.LabelText:SetText(nameStr);
-			unitListing.CostText:SetText(costStr);
-			if(costStrTT ~= "") then
-				unitListing.CostText:SetToolTipString(costStrTT);
-			end
-			unitListing.TrainUnit:SetToolTipString(item.ToolTip);
-			unitListing.Disabled:SetToolTipString(item.ToolTip);
-
-			-- Set Icon color and backing
-			local textureName = TEXTURE_BASE;
-			if item.Type ~= -1 then
-				if (GameInfo.Units[item.Type].Combat ~= 0 or GameInfo.Units[item.Type].RangedCombat ~= 0) then		-- Need a simpler what to test if the unit is a combat unit or not.
-					if "DOMAIN_SEA" == GameInfo.Units[item.Type].Domain then
-						textureName = TEXTURE_NAVAL;
-					else
-						textureName =  TEXTURE_BASE;
-					end
-				else
-					if GameInfo.Units[item.Type].MakeTradeRoute then
-						textureName = TEXTURE_TRADE;
-					elseif "FORMATION_CLASS_SUPPORT" == GameInfo.Units[item.Type].FormationClass then
-						textureName = TEXTURE_SUPPORT;
-					else
-						textureName = TEXTURE_CIVILIAN;
-					end
-				end
-			end
-
-			-- Set colors and icons for the flag instance
-			unitListing.FlagBase:SetTexture(textureName);
-			unitListing.FlagBaseOutline:SetTexture(textureName);
-			unitListing.FlagBaseDarken:SetTexture(textureName);
-			unitListing.FlagBaseLighten:SetTexture(textureName);
-			unitListing.FlagBase:SetColor( primaryColor );
-			unitListing.FlagBaseOutline:SetColor( primaryColor );
-			unitListing.FlagBaseDarken:SetColor( darkerFlagColor );
-			unitListing.FlagBaseLighten:SetColor( brighterFlagColor );
-			unitListing.Icon:SetColor( secondaryColor );
-			unitListing.Icon:SetIcon(ICON_PREFIX..item.Type);
-
-			-- Handle if the item is disabled
-			if (item.Disabled) then
-				if(showDisabled) then
-					unitListing.Disabled:SetHide(false);
-					unitListing.TrainUnit:SetColor(COLOR_LOW_OPACITY);
-					unitListing.RecommendedIcon:SetHide(true);
-				else
-					unitListing.TrainUnit:SetHide(true);
-				end
-			else
-				unitListing.TrainUnit:SetHide(false);
-				unitListing.Disabled:SetHide(true);
-				unitListing.TrainUnit:SetColor(0xffffffff);
-			end
-			unitListing.TrainUnit:SetDisabled(item.Disabled);
-			if (listMode == LISTMODE.PRODUCTION) then
-				unitListing.TrainUnit:RegisterCallback( Mouse.eLClick, function()
-					QueueUnit(data.City, item, m_isCONTROLpressed);
-					end);
-
-				unitListing.TrainUnit:RegisterCallback( Mouse.eMClick, function()
-					QueueUnit(data.City, item, true);
-					RecenterCameraToSelectedCity();
-					end);
-			else
-				unitListing.TrainUnit:RegisterCallback( Mouse.eLClick, function()
-					PurchaseUnit(data.City, item);
-					end);
-			end
-
-			unitListing.TrainUnit:RegisterCallback( Mouse.eRClick, function()
-				LuaEvents.OpenCivilopedia(item.Type);
-			end);
-
-			unitListing.TrainUnit:SetTag(UITutorialManager:GetHash(item.Type));
-
-			-- Controls for training unit corps and armies.
-			-- Want a special text string for this!! #NEW TEXT #LOCALIZATION - "You can only directly build corps and armies once you have constructed a military academy."
-			-- LOC_UNIT_TRAIN_NEED_MILITARY_ACADEMY
-			if item.Corps or item.Army then
-				--if (item.Disabled) then
-				--	if(showDisabled) then
-				--		unitListing.CorpsDisabled:SetHide(false);
-				--		unitListing.ArmyDisabled:SetHide(false);
-				--	end
-				--end
-				unitListing.CorpsArmyDropdownArea:SetHide(false);
-				unitListing.CorpsArmyDropdownButton:RegisterCallback( Mouse.eLClick, function()
-						local isExpanded = unitListing.CorpsArmyArrow:IsSelected();
-						unitListing.CorpsArmyArrow:SetSelected(not isExpanded);
-						unitListing.ArmyCorpsDrawer:SetHide(not isExpanded);
-						unitList.List:CalculateSize();
-						unitList.List:ReprocessAnchoring();
-						unitList.Top:CalculateSize();
-						unitList.Top:ReprocessAnchoring();
-						if(listMode == LISTMODE.PRODUCTION) then
-							Controls.ProductionList:CalculateSize();
-							Controls.ProductionListScroll:CalculateSize();
-						elseif(listMode == LISTMODE.PURCHASE_GOLD) then
-							Controls.PurchaseList:CalculateSize();
-							Controls.PurchaseListScroll:CalculateSize();
-						elseif(listMode == LISTMODE.PURCHASE_FAITH) then
-							Controls.PurchaseFaithList:CalculateSize();
-							Controls.PurchaseFaithListScroll:CalculateSize();
-						end
-						end);
-			end
-
-			if item.Corps then
-				-- Check to see if this item is recommended
-				--for _,hash in ipairs( m_recommendedItems) do
-				--	if(item.Hash == hash.BuildItemHash) then
-				--		unitListing.CorpsRecommendedIcon:SetHide(false);
-				--	end
-				--end
-				unitListing.CorpsButtonContainer:SetHide(false);
-				-- Production meter progress for corps unit
-				if (listMode == LISTMODE.PRODUCTION) then
-					-- ProductionQueue: We need to check that there isn't already one of these in the queue
-					if(IsHashInQueue(selectedCity, item.Hash)) then
-						item.CorpsTurnsLeft = math.ceil(item.CorpsCost / cityData.ProductionPerTurn);
-						item.Progress = 0;
-					end
-
-					if(item.Progress > 0) then
-						unitListing.ProductionCorpsProgressArea:SetHide(false);
-						local unitProgress = item.Progress/item.CorpsCost;
-						if (unitProgress < 1) then
-							unitListing.ProductionCorpsProgress:SetPercent(unitProgress);
-						else
-							unitListing.ProductionCorpsProgressArea:SetHide(true);
-						end
-					else
-						unitListing.ProductionCorpsProgressArea:SetHide(true);
-					end
-					local turnsStr = item.CorpsTurnsLeft .. "[ICON_Turn]";
-					local turnsStrTT = item.CorpsTurnsLeft .. Locale.Lookup("LOC_HUD_CITY_TURNS_TO_COMPLETE", item.CorpsTurnsLeft);
-					unitListing.CorpsCostText:SetText(turnsStr);
-					unitListing.CorpsCostText:SetToolTipString(turnsStrTT);
-				else
-					unitListing.ProductionCorpsProgressArea:SetHide(true);
-					if (item.Yield == "YIELD_GOLD") then
-						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_GOLD_TEXT", item.CorpsCost);
-					else
-						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_FAITH_TEXT", item.CorpsCost);
-					end
-					if (item.CorpsDisabled) then
-						if (showDisabled) then
-							unitListing.CorpsDisabled:SetHide(false);
-						end
-						costStr = "[COLOR:Red]" .. costStr .. "[ENDCOLOR]";
-					end
-					unitListing.CorpsCostText:SetText(costStr);
-				end
-
-
-				unitListing.CorpsLabelIcon:SetText(item.CorpsName);
-				unitListing.CorpsLabelText:SetText(nameStr);
-
-				unitListing.CorpsFlagBase:SetTexture(textureName);
-				unitListing.CorpsFlagBaseOutline:SetTexture(textureName);
-				unitListing.CorpsFlagBaseDarken:SetTexture(textureName);
-				unitListing.CorpsFlagBaseLighten:SetTexture(textureName);
-				unitListing.CorpsFlagBase:SetColor( primaryColor );
-				unitListing.CorpsFlagBaseOutline:SetColor( primaryColor );
-				unitListing.CorpsFlagBaseDarken:SetColor( darkerFlagColor );
-				unitListing.CorpsFlagBaseLighten:SetColor( brighterFlagColor );
-				unitListing.CorpsIcon:SetColor( secondaryColor );
-				unitListing.CorpsIcon:SetIcon(ICON_PREFIX..item.Type);
-				unitListing.TrainCorpsButton:SetToolTipString(item.CorpsTooltip);
-				unitListing.CorpsDisabled:SetToolTipString(item.CorpsTooltip);
-				if (listMode == LISTMODE.PRODUCTION) then
-					unitListing.TrainCorpsButton:RegisterCallback( Mouse.eLClick, function()
-						QueueUnitCorps(data.City, item);
-					end);
-
-					unitListing.TrainCorpsButton:RegisterCallback( Mouse.eMClick, function()
-						QueueUnitCorps(data.City, item, true);
-						RecenterCameraToSelectedCity();
-					end);
-				else
-					unitListing.TrainCorpsButton:RegisterCallback( Mouse.eLClick, function()
-						PurchaseUnitCorps(data.City, item);
-					end);
-				end
-			end
-			if item.Army then
-				-- Check to see if this item is recommended
-				--for _,hash in ipairs( m_recommendedItems) do
-				--	if(item.Hash == hash.BuildItemHash) then
-				--		unitListing.ArmyRecommendedIcon:SetHide(false);
-				--	end
-				--end
-				unitListing.ArmyButtonContainer:SetHide(false);
-
-				if (listMode == LISTMODE.PRODUCTION) then
-					-- ProductionQueue: We need to check that there isn't already one of these in the queue
-					if(IsHashInQueue(selectedCity, item.Hash)) then
-						item.ArmyTurnsLeft = math.ceil(item.ArmyCost / cityData.ProductionPerTurn);
-						item.Progress = 0;
-					end
-
-					if(item.Progress > 0) then
-						unitListing.ProductionArmyProgressArea:SetHide(false);
-						local unitProgress = item.Progress/item.ArmyCost;
-						unitListing.ProductionArmyProgress:SetPercent(unitProgress);
-						if (unitProgress < 1) then
-							unitListing.ProductionArmyProgress:SetPercent(unitProgress);
-						else
-							unitListing.ProductionArmyProgressArea:SetHide(true);
-						end
-					else
-						unitListing.ProductionArmyProgressArea:SetHide(true);
-					end
-					local turnsStr = item.ArmyTurnsLeft .. "[ICON_Turn]";
-					local turnsStrTT = item.ArmyTurnsLeft .. Locale.Lookup("LOC_HUD_CITY_TURNS_TO_COMPLETE", item.ArmyTurnsLeft);
-					unitListing.ArmyCostText:SetText(turnsStr);
-					unitListing.ArmyCostText:SetToolTipString(turnsStrTT);
-				else
-					unitListing.ProductionArmyProgressArea:SetHide(true);
-					if (item.Yield == "YIELD_GOLD") then
-						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_GOLD_TEXT", item.ArmyCost);
-					else
-						costStr = Locale.Lookup("LOC_PRODUCTION_PURCHASE_FAITH_TEXT", item.ArmyCost);
-					end
-					if (item.ArmyDisabled) then
-						if (showDisabled) then
-							unitListing.ArmyDisabled:SetHide(false);
-						end
-						costStr = "[COLOR:Red]" .. costStr .. "[ENDCOLOR]";
-					end
-					unitListing.ArmyCostText:SetText(costStr);
-				end
-
-				unitListing.ArmyLabelIcon:SetText(item.ArmyName);
-				unitListing.ArmyLabelText:SetText(nameStr);
-				unitListing.ArmyFlagBase:SetTexture(textureName);
-				unitListing.ArmyFlagBaseOutline:SetTexture(textureName);
-				unitListing.ArmyFlagBaseDarken:SetTexture(textureName);
-				unitListing.ArmyFlagBaseLighten:SetTexture(textureName);
-				unitListing.ArmyFlagBase:SetColor( primaryColor );
-				unitListing.ArmyFlagBaseOutline:SetColor( primaryColor );
-				unitListing.ArmyFlagBaseDarken:SetColor( darkerFlagColor );
-				unitListing.ArmyFlagBaseLighten:SetColor( brighterFlagColor );
-				unitListing.ArmyIcon:SetColor( secondaryColor );
-				unitListing.ArmyIcon:SetIcon(ICON_PREFIX..item.Type);
-				unitListing.TrainArmyButton:SetToolTipString(item.ArmyTooltip);
-				unitListing.ArmyDisabled:SetToolTipString(item.ArmyTooltip);
-				if (listMode == LISTMODE.PRODUCTION) then
-					unitListing.TrainArmyButton:RegisterCallback( Mouse.eLClick, function()
-						QueueUnitArmy(data.City, item);
-					end);
-
-					unitListing.TrainArmyButton:RegisterCallback( Mouse.eMClick, function()
-						QueueUnitArmy(data.City, item, true);
-						RecenterCameraToSelectedCity();
-					end);
-				else
-					unitListing.TrainArmyButton:RegisterCallback( Mouse.eLClick, function()
-						PurchaseUnitArmy(data.City, item);
-					end);
-				end
-			end
-		end -- end faith/gold check
-	end -- end iteration through units
-
-	unitList.List:CalculateSize();
-	unitList.List:ReprocessAnchoring();
-
-	if (unitList.List:GetSizeY()==0) then
-		unitList.Top:SetHide(true);
-	else
-		m_maxProductionSize = m_maxProductionSize + HEADER_Y + SEPARATOR_Y;
-		unitList.Header:RegisterCallback( Mouse.eLClick, function()
-			OnExpand(uL);
-			end);
-		unitList.HeaderOn:RegisterCallback( Mouse.eLClick, function()
-			OnCollapse(uL);
-			end);
-	end
-
-	if( listMode== LISTMODE.PURCHASE_GOLD) then
-		purchGoldUnitList = uL;
-	elseif (listMode == LISTMODE.PURCHASE_FAITH) then
-		purchFaithUnitList = uL;
-	else
-		prodUnitList = uL;
-	end
 
 	if(listMode == LISTMODE.PRODUCTION) then			--Projects can only be produced, not purchased
 		-- Populate Projects ------------------------

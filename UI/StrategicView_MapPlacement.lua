@@ -58,7 +58,7 @@ function ConfirmPlaceWonder( pInputStruct:table )
 				local tProductionQueueParameters = { tParameters=tParameters, plotId=plotId, pSelectedCity=pSelectedCity, buildingHash=eBuilding }
 				LuaEvents.StrageticView_MapPlacement_ProductionClose(tProductionQueueParameters);
 				UI.PlaySound("Build_Wonder");
-				ExitPlacementMode();
+				-- ExitPlacementMode();
 			end);
 			pPopupDialog:AddButton(Locale.Lookup("LOC_NO"), nil);
 			pPopupDialog:Open();
@@ -211,7 +211,7 @@ function ConfirmPlaceDistrict(pInputStruct:table)
 				--CityManager.RequestOperation(pSelectedCity, CityOperationTypes.BUILD, tParameters);
 				local tProductionQueueParameters = { tParameters=tParameters, plotId=plotId, pSelectedCity=pSelectedCity, buildingHash=districtHash }
 				LuaEvents.StrageticView_MapPlacement_ProductionClose(tProductionQueueParameters);
-				ExitPlacementMode();
+				-- ExitPlacementMode();
 			end);
 			pPopupDialog:AddButton(Locale.Lookup("LOC_NO"), nil);
 			pPopupDialog:Open();
