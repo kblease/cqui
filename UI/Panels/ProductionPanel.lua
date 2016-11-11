@@ -781,6 +781,10 @@ function PopulateList(data, listMode, listIM)
 					-- buildingItem.ToolTip = buildingItem.ToolTip .. " " .. Locale.Lookup(GameInfo.Buildings[GameInfo.MutuallyExclusiveBuildings[buildingItem.Hash].MutuallyExclusiveBuilding].Name);
 				end
 			end
+		
+			if(buildingItem.Hash == GameInfo.Buildings["BUILDING_PALACE"].Hash) then
+				displayItem = false;
+			end
 
 			if(not buildingItem.IsWonder and not IsBuildingInQueue(selectedCity, buildingItem.Hash) and displayItem) then
 				local uniqueDrawerName = BUILDING_DRAWER_PREFIX..buildingItem.PrereqDistrict;
